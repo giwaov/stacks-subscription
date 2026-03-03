@@ -77,3 +77,55 @@
     )
   )
 )
+
+;; ===== SUBSCRIPTION EXTENSIONS =====
+
+;; Renew existing subscription (same tier)
+(define-public (renew-subscription)
+  (let ((sub (unwrap! (map-get? subscriptions tx-sender) (err u1))))
+    (let ((tier (get tier sub))
+          (price (if (is-eq tier "basic") BASIC_PRICE
+                    (if (is-eq tier "pro") PRO_PRICE PREMIUM_PRICE))))
+      (try! (stx-transfer? price tx-sender (var-get owner)))
+      (map-set subscriptions tx-sender {
+        tier: tier,
+        expires-at: (+ (if (> (get expires-at sub) block-height)
+                          (get expires-at sub)
+                          block-height) DURATION),
+        amount-paid: (+ (get amount-paid sub) price)
+      })
+      (ok tier))))
+
+;; Upgrade subscription tier
+(define-public (upgrade-to-pro)
+  (let ((sub (unwrap! (map-get? subscriptions tx-sender) (err u1))))
+    (asserts! (is-eq (get tier sub) "basic") (err u2))
+    (let ((price-diff (- PRO_PRICE BASIC_PRICE)))
+      (try! (stx-transfer? price-diff tx-sender (var-get owner)))
+      (map-set subscriptions tx-sender (merge sub { tier: "pro" }))
+      (ok "pro"))))
+
+(define-public (upgrade-to-premium)
+  (let ((sub (unwrap! (map-get? subscriptions tx-sender) (err u1))))
+    (let ((current-tier (get tier sub))
+          (price-diff (if (is-eq current-tier "basic") 
+                         (- PREMIUM_PRICE BASIC_PRICE)
+                         (- PREMIUM_PRICE PRO_PRICE))))
+      (asserts! (not (is-eq current-tier "premium")) (err u3))
+      (try! (stx-transfer? price-diff tx-sender (var-get owner)))
+      (map-set subscriptions tx-sender (merge sub { tier: "premium" }))
+      (ok "premium"))))
+
+;; Get days until expiration (approximate)
+(define-read-only (get-days-remaining (user principal))
+  (match (map-get? subscriptions user)
+    sub (if (> (get expires-at sub) block-height)
+            (/ (- (get expires-at sub) block-height) u144)  ;; ~144 blocks per day
+            u0)
+    u0))
+
+;; Get price for a tier
+(define-read-only (get-tier-price (tier (string-ascii 20)))
+  (if (is-eq tier "basic") BASIC_PRICE
+    (if (is-eq tier "pro") PRO_PRICE
+      (if (is-eq tier "premium") PREMIUM_PRICE u0))))
